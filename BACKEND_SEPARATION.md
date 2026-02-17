@@ -1,178 +1,88 @@
-# バックエンド分離とサーバー稼働の手順
+# バックエンド分離とサーバー稼働の手順（Flet Webアプリ方式）
 
-このドキュメントでは、現在のFletアプリケーション（スタンドアロン構成）から、バックエンド（データベース処理）を分離してサーバー上で動作させるクライアント・サーバー構成への移行手順をまとめます。
+Fletはクライアント・サーバーアーキテクチャを採用しており、標準機能としてWebアプリケーションとして動作させるモードを備えています。これを利用することで、バックエンド（Pythonロジック・DB操作）をサーバー上で実行し、フロントエンド（UI）をユーザーのブラウザに表示させることができます。
 
-## 構成の変更点
-
-*   **変更前**: クライアントアプリが直接SQLiteデータベースファイル(`app.db`)を読み書きする。
-*   **変更後**:
-    *   **サーバー**: データベース操作を行うWeb API (FastAPI) を提供する。
-    *   **クライアント**: API経由でデータの取得・更新を行う。データベースファイルには直接アクセスしない。
+この方法では、別途REST API（FastAPIなど）を構築したり、クライアント側でHTTPリクエストを実装したりする必要がなく、既存のコードベースをほぼそのまま利用できるため、最も効率的な分離・移行手順となります。
 
 ---
 
-## 1. 必要なライブラリのインストール
+## 1. 構成の概要
 
-サーバー機能（FastAPI）とHTTP通信（requests）のために、以下のライブラリを追加します。
+*   **サーバー**: Pythonスクリプト(`main.py`など)を実行し、データベース(`app.db`)を操作します。Fletの内蔵サーバーまたはUvicornなどのASGIサーバーとして動作します。
+*   **クライアント**: ユーザーのWebブラウザがクライアントとなり、WebSocketを通じてサーバーと通信し、UIを描画します。
+
+## 2. 必要なライブラリのインストール
+
+サーバーとして動作させるために、Web関連の機能（FastAPI, Uvicornなど）を含む `flet-web` が必要です。
 
 ```bash
-pip install fastapi uvicorn requests
+pip install "flet[web]" uvicorn
 ```
 
-`requirements.txt` にも以下を追加してください。
+※ `flet[web]` をインストールすることで、必要な `flet-web` パッケージもインストールされます。
+
+`requirements.txt` には以下のように記述してください。
 
 ```txt
-fastapi
+flet
+flet-web
 uvicorn
-requests
 ```
+
+※ 環境によっては `flet-web` を明示的に記述しないとエラーになる場合があるため、推奨されます。
 
 ---
 
-## 2. サーバー側の実装 (`server.py`)
+## 3. 実行方法（開発・簡易テスト）
 
-プロジェクトのルートディレクトリに `server.py` を作成します。
-このファイルがAPIサーバーのエントリーポイントとなり、既存の `database` モジュールを利用してデータベース操作を行います。
-
-```python
-# server.py
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from database.database import init_db
-from database.auth import authenticate_user, create_user
-import uvicorn
-
-app = FastAPI()
-
-# リクエストボディの定義
-class UserAuth(BaseModel):
-    username: str
-    password: str
-
-@app.on_event("startup")
-def on_startup():
-    """サーバー起動時にデータベースを初期化"""
-    init_db()
-    # 初期ユーザーの作成（必要に応じて）
-    create_user("admin", "password")
-
-@app.post("/login")
-def login(auth: UserAuth):
-    """ログインAPI"""
-    if authenticate_user(auth.username, auth.password):
-        return {"status": "success", "message": "Login successful"}
-    else:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-@app.post("/register")
-def register(auth: UserAuth):
-    """ユーザー登録API（必要に応じて実装）"""
-    if create_user(auth.username, auth.password):
-        return {"status": "success", "message": "User created"}
-    else:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-if __name__ == "__main__":
-    # 開発用サーバー起動設定
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-```
-
----
-
-## 3. クライアント側の修正
-
-### 3.1. `views/login_view.py` の修正
-
-直接 `database.auth` をインポートするのをやめ、APIサーバーへリクエストを送るように変更します。
-
-**修正前:**
-```python
-from database.auth import authenticate_user
-# ...
-            if authenticate_user(username, password):
-                self.on_login_success()
-            else:
-                self.error_text.value = "ユーザー名またはパスワードが間違っています。"
-```
-
-**修正後:**
-```python
-import requests
-# database.auth のインポートは削除
-
-# ... (中略) ...
-
-    def login(self, e):
-        # ... (入力チェックなどはそのまま) ...
-
-            username = self.username_field.value
-            password = self.password_field.value
-
-            # APIサーバーのURL (環境に合わせて変更してください)
-            API_URL = "http://localhost:8000/login"
-
-            try:
-                response = requests.post(
-                    API_URL,
-                    json={"username": username, "password": password},
-                    timeout=5
-                )
-
-                if response.status_code == 200:
-                    self.on_login_success()
-                elif response.status_code == 401:
-                    self.error_text.value = "ユーザー名またはパスワードが間違っています。"
-                    self.update()
-                else:
-                    self.error_text.value = f"エラーが発生しました: {response.status_code}"
-                    self.update()
-
-            except requests.exceptions.RequestException as ex:
-                self.error_text.value = "サーバーに接続できませんでした。"
-                self.update()
-                print(ex)
-```
-
-### 3.2. `main.py` の修正
-
-`main.py` で行っていたデータベースの初期化処理はサーバー側に移譲したため、削除します。
-
-**修正箇所:**
-1. `from database.database import init_db` を削除
-2. `from database.auth import create_user` を削除
-3. `init_db()` の呼び出しを削除
-4. `create_user(...)` の呼び出しを削除
-
----
-
-## 4. 実行手順
-
-### 手順1: サーバーの起動
-
-まず、APIサーバーを起動します。
+最も簡単な方法は、FletのCLIツールを使用してWebモードで起動することです。コードの変更は不要です。
 
 ```bash
-python server.py
-# または
-uvicorn server:app --reload
+# プロジェクトのルートディレクトリで実行
+flet run --web --port 8000 --host 0.0.0.0 main.py
 ```
 
-これによって `http://localhost:8000` でAPIが待ち受け状態になります。
+*   `--web`: Webアプリとして起動します。
+*   `--port 8000`: 8000番ポートを使用します（必要に応じて変更）。
+*   `--host 0.0.0.0`: 外部からの接続を受け付けます。
 
-### 手順2: クライアントの起動
+これで、ブラウザから `http://<サーバーのIPアドレス>:8000` にアクセスすると、アプリケーションが利用できます。
 
-別のターミナルでクライアントアプリを起動します。
+---
+
+## 4. 実行方法（本番環境・Uvicorn使用）
+
+本番環境では、より堅牢なASGIサーバーである `uvicorn` を使用することをお勧めします。そのためには、ASGIアプリケーションオブジェクトをエクスポートする小さなラッパースクリプトを作成します。
+
+### 4.1. `asgi.py` の作成
+
+プロジェクトのルートディレクトリに `asgi.py` を作成します。
+
+```python
+# asgi.py
+import flet as ft
+from main import main  # 既存のmain関数をインポート
+
+# ASGIアプリケーションの作成
+app = ft.app(main, export_asgi_app=True)
+```
+
+### 4.2. サーバーの起動
+
+`uvicorn` コマンドを使ってサーバーを起動します。
 
 ```bash
-flet run main.py
-# または
-python main.py
+uvicorn asgi:app --host 0.0.0.0 --port 8000
 ```
 
-クライアントからログイン操作を行うと、サーバー側のログにリクエストが表示され、認証が行われます。
+*   `asgi:app`: `asgi.py` ファイル内の `app` オブジェクトを指定しています。
 
-## 注意事項
+---
 
-*   **セキュリティ**: 本番環境で運用する場合は、パスワードの平文送信を避けるため、HTTPS化（SSL/TLS）が必須です。
-*   **エラーハンドリング**: ネットワークエラー時の再試行処理などを適宜追加してください。
-*   **構成管理**: サーバーとクライアントを別のマシンで動かす場合は、`API_URL` をサーバーのIPアドレスまたはドメインに変更してください。
+## 5. 注意事項
+
+*   **ステート管理**: Fletはセッションごとに独立した状態を持ちますが、グローバル変数などを使うと全ユーザーで共有されてしまう可能性があります。データベース以外の状態管理には注意してください。
+*   **データベース**: `sqlite3` はサーバー上のローカルファイルを使用するため、すべてのユーザーが同じデータベースを参照します（これが意図した動作です）。
+*   **セキュリティ**: インターネット公開する場合は、HTTPS化（SSL/TLS）を前段のWebサーバー（Nginxなど）で行うことを強く推奨します。
+
+この方式により、バックエンドロジックのサーバー集約と、クライアントへのUI配信が、Fletの標準機能だけで実現できます。
