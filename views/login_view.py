@@ -3,6 +3,7 @@
 ユーザー名とパスワードの入力、およびログイン処理を提供します。
 """
 import flet as ft
+from database.auth import authenticate_user
 
 class LoginView(ft.Column):
     """
@@ -59,5 +60,11 @@ class LoginView(ft.Column):
             self.error_text.value = "ユーザー名とパスワードを入力してください。"
             self.update()
         else:
-            # ここに実際の認証ロジックを実装する（現在はダミー）
-            self.on_login_success()
+            username = self.username_field.value
+            password = self.password_field.value
+
+            if authenticate_user(username, password):
+                self.on_login_success()
+            else:
+                self.error_text.value = "ユーザー名またはパスワードが間違っています。"
+                self.update()
