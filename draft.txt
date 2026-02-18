@@ -12,3 +12,6 @@ Flet で動かすデスクトップアプリのサンプル
 * データの保守画面
 * CSVの出力
 * エクセルファイルに書き込み
+
+note
+pip install customtkinter pandas openpyxl sqlalchemy reportlab
